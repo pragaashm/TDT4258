@@ -12,11 +12,18 @@
 #include <sys/ioctl.h>
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <stdint.h>
+
+
+#define NUM_WORDS 64
+#define FILESIZE (NUM_WORDS * sizeof(uint16_t))
 
 //Globals
 int fbfd;
-
-
+struct fb_fix_screeninfo finfo;
+char *fbp = 0;
 
 
 // The game state can be used to detect what happens on the playfield
@@ -72,18 +79,54 @@ gameConfig game = {
 // Here you can initialize what ever you need for your task
 // return false if something fails, else true
 bool initializeSenseHat() {
+
+  //Opening dev/fb1 for reading and writing
   fbfd = open("/dev/fb1", O_RDWR);
-  if (fbdf == -1){
+  if (fbfd == -1){
     perror("Identification error!")
     return false;
   }
+
+  // Retrieving fixed screen info
+  if (ioctl(fbfd, FBIOGET_FSCREENINFO, &finfo) == -1) {
+    perror("Error reading fixed information.\n");
+    close(fbfd);
+    return false;
+  }
+
+  // Check the correct device has been found
+  if (strcmp(finfo.id, "RPi-Sense FB") != 0) {
+    printf("%s\n", "Error: RPi-Sense FB not found");
+    close(fbfd);
+    return false;
+  }
+
+  // Mapping framebuffer device into memory
+  fbp = mmap(NULL, FILESIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fbfd, 0);
+  if (fbp == MAP_FAILED) {
+    close(fbfd);
+    perror("Error mmapping the file");
+    return false;
+    }
+
   return true;
+
 }
 
 // This function is called when the application exits
 // Here you can free up everything that you might have opened/allocated
 void freeSenseHat() {
+ 
+ /* clear the led matrix */
+ memset(map, 0, FILESIZE);
 
+
+ /* un-map and close */
+ if (munmap(map, FILESIZE) == -1) {
+   perror("Error un-mmapping the file");
+   }
+   close(fbfd);
+   return 0;
 }
 
 // This function should return the key that corresponds to the joystick press
