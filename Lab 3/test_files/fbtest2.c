@@ -18,7 +18,6 @@ int main(int argc, char* argv[])
   int fbfd;
   struct fb_var_screeninfo vinfo;
   struct fb_fix_screeninfo finfo;
-  long int screensize = 0;
   char *fbp = 0;
 
   // Open the file for reading and writing
@@ -30,14 +29,14 @@ int main(int argc, char* argv[])
   printf("The framebuffer device was opened successfully.\n");
 
   // Get fixed screen information
-  if (ioctl(fbfd, FBIOGET_FSCREENINFO, &fix_info) == -1) {
+  if (ioctl(fbfd, FBIOGET_FSCREENINFO, &finfo) == -1) {
     printf("Error reading fixed information.\n");
     close(fbfd);
     exit(EXIT_FAILURE);
   }
 
   /* now check the correct device has been found */
-    if (strcmp(fix_info.id, "RPi-Sense FB") != 0) {
+    if (strcmp(finfo.id, "RPi-Sense FB") != 0) {
 	printf("%s\n", "Error: RPi-Sense FB not found");
 	close(fbfd);
 	exit(EXIT_FAILURE);
@@ -53,7 +52,7 @@ int main(int argc, char* argv[])
 
   /* map the led frame buffer device into memory */
     fbp = mmap(NULL, FILESIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fbfd, 0);
-    if (map == MAP_FAILED) {
+    if (fbp == MAP_FAILED) {
 	close(fbfd);
 	perror("Error mmapping the file");
 	exit(EXIT_FAILURE);
@@ -75,13 +74,13 @@ int main(int argc, char* argv[])
   else {
     // draw...
     // just fill upper half of the screen with something
-    memset(fbp, 0xff, screensize/2);
+    memset(fbp, 0xff, FILESIZE/2);
     // and lower half with something else
-    memset(fbp + screensize/2, 0x18, screensize/2);
+    memset(fbp + FILESIZE/2, 0x18, FILESIZE/2);
   }
 
   // cleanup
-  munmap(fbp, screensize);
+  munmap(fbp, FILESIZE);
   close(fbfd);
   return 0;
 }
