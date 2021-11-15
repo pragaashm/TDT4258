@@ -8,6 +8,15 @@
 #include <string.h>
 #include <time.h>
 #include <poll.h>
+#include <linux/fb.h>
+#include <sys/ioctl.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+
+//Globals
+int fbfd;
+
+
 
 
 // The game state can be used to detect what happens on the playfield
@@ -63,6 +72,11 @@ gameConfig game = {
 // Here you can initialize what ever you need for your task
 // return false if something fails, else true
 bool initializeSenseHat() {
+  fbfd = open("/dev/fb1", O_RDWR);
+  if (fbdf == -1){
+    perror("Identification error!")
+    return false;
+  }
   return true;
 }
 
