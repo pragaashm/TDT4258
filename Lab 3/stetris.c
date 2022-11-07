@@ -12,19 +12,21 @@
 #include <sys/ioctl.h>
 #include <fcntl.h>
 #include <sys/mman.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <stdint.h>
+#include <dirent.h>
 
+//Personal definations
+#define JOYSTICK_NAME "Raspberry Pi Sense HAT Joystick"
+#define FRAMEBUFFER_NAME "RPi-Sense FB"
+#define MATRIX_SIZE (64 * sizeof(u_int16_t))
 
-#define NUM_WORDS 64
-#define FILESIZE (NUM_WORDS * sizeof(uint16_t))
-
-//Globals
-int fbfd;
-struct fb_fix_screeninfo finfo;
-char *fbp = 0;
-
+//File descriptor of the LED frame buffer and joystick input
+int fb_fd;
+int joy_fd;
+//Fixed and variable screen info of the LED frame buffer
+struct fb_var_screeninfo fb_var_info;
+struct fb_fix_screeninfo fb_fix_info;
+//LED Matrix pointer 
+u_int16_t *matrix_Pointer;
 
 // The game state can be used to detect what happens on the playfield
 #define GAMEOVER   0
@@ -36,6 +38,7 @@ char *fbp = 0;
 // the game logic allocate/deallocate and reset the memory
 typedef struct {
   bool occupied;
+  int color;
 } tile;
 
 typedef struct {
@@ -74,59 +77,129 @@ gameConfig game = {
                    .initNextGameTick = 50,
 };
 
+//Array of RGB565 colors to use for the tiles
+int colors[8] = {0xF800, 0xFFE0, 0x7E0, 0x7FF, 0xF81F, 0xD01F, 0xD3A4, 0x001F};
+
+//Color randomizer for tiles
+int selectRandColor(){
+    return colors[rand() % 8];
+} 
+
+//Look for joystick input
+int initJoystick(){
+  DIR *directory = opendir("/dev/input");
+  struct dirent *entry;
+
+  //If unable to open directory
+  if (!directory){
+    return false;
+  }
+
+  char name[64];
+  while ((entry = readdir(directory)) != NULL){
+    //Opening input device
+    int fd = openat(dirfd(directory), entry->d_name, O_RDONLY | O_NONBLOCK);
+
+    //Compare the device with the one given under file description
+    if (ioctl(fd, EVIOCGNAME(sizeof(name)), name) >= 0){
+      if (strcmp(name, JOYSTICK_NAME) != 0){
+        fprintf(stderr, "Error! Wrong device.\n");
+      }else{
+
+        joy_fd = fd;
+      }
+    }
+
+    close(fd);
+
+  }
+//Close and reset
+return -1;
+}
+//Look for LED Framebuffer
+int initFrameBuffer(){
+  DIR *directory = opendir("/dev");
+  struct dirent *entry;
+  //Initialize counter to find number of frame buffers
+  int count = 0;
+  
+  //If unable to open directory
+  if (!directory){
+    return false;
+  }
+
+  while ((entry = readdir(directory)) != NULL){
+
+    //Check directory entry name, and increase counter if hit
+    if(strncmp("fb", entry->d_name, 2) == 0){
+
+      count++;
+    }
+  }
+  closedir(directory);
+
+  //Loop through all entries 
+  int fb;
+  for (size_t i = 0; i < count; i++){
+
+    //Creating path to framebuffers to open
+    char path[512] = {};
+    strcat(path, "/dev/fb");
+    sprintf(&path[strlen(path)], "%d", i);
+
+    //Open found path and check if hit
+    fb = open(path, O_RDWR);
+    if (!fb){
+      return false;
+    }
+
+    //Get fixed screen and variable screen info from framebuffer.
+    //Print error message otherwise
+     if (ioctl(fb, FBIOGET_FSCREENINFO, &fb_fix_info) < 0) {
+        fprintf(stderr, "Error! Could not retrieve fixed screen info.\n");
+        return false;
+    }
+
+    if (ioctl(fb, FBIOGET_VSCREENINFO, &fb_var_info) < 0) {
+        fprintf(stderr, "Error! Could not retrieve variable screen info.\n");
+        return false;
+    }
+    
+    //check if it is correct framebuffer device
+    if (strcmp(fb_fix_info.id, FRAMEBUFFER_NAME) != 0){
+      fprintf(stderr, "Error! Wrong framebuffer device.\n");
+    }else{
+      fb_fd = fb;
+      return true;
+    }    
+  }
+  return false;
+
+}
 
 // This function is called on the start of your application
 // Here you can initialize what ever you need for your task
 // return false if something fails, else true
 bool initializeSenseHat() {
-
-  //Opening dev/fb1 for reading and writing
-  fbfd = open("/dev/fb1", O_RDWR);
-  if (fbfd == -1){
-    perror("Identification error!")
-    return false;
-  }
-
-  // Retrieving fixed screen info
-  if (ioctl(fbfd, FBIOGET_FSCREENINFO, &finfo) == -1) {
-    perror("Error reading fixed information.\n");
-    close(fbfd);
-    return false;
-  }
-
-  // Check the correct device has been found
-  if (strcmp(finfo.id, "RPi-Sense FB") != 0) {
-    printf("%s\n", "Error: RPi-Sense FB not found");
-    close(fbfd);
-    return false;
-  }
-
-  // Mapping framebuffer device into memory
-  fbp = mmap(NULL, FILESIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fbfd, 0);
-  if (fbp == MAP_FAILED) {
-    close(fbfd);
-    perror("Error mmapping the file");
-    return false;
-    }
+  initFrameBuffer();
+  initJoystick();
+  matrix_Pointer = mmap(NULL, MATRIX_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fb_fd, 0);
+  close(fb_fd);
 
   return true;
-
 }
 
 // This function is called when the application exits
 // Here you can free up everything that you might have opened/allocated
 void freeSenseHat() {
- 
- /* clear the led matrix */
- memset(map, 0, FILESIZE);
+    //Turning off the LED lights
+    memset(matrix_Pointer, 0, MATRIX_SIZE);
+    //Unmap the LED matrix mmap
+    munmap(matrix_Pointer, MATRIX_SIZE);
+    //close frame buffer and joystick
+    close(fb_fd);
+    close(joy_fd);
 
-
- /* un-map and close */
- if (munmap(map, FILESIZE) == -1) {
-   perror("Error un-mmapping the file");
-   }
-   close(fbfd);
-   return 0;
 }
 
 // This function should return the key that corresponds to the joystick press
@@ -134,16 +207,37 @@ void freeSenseHat() {
 // and KEY_ENTER, when the the joystick is pressed
 // !!! when nothing was pressed you MUST return 0 !!!
 int readSenseHatJoystick() {
-  return 0;
-}
+  struct pollfd joyPoll = {.fd = joy_fd, .events = POLLIN};
 
+
+
+
+    return 0;
+}
 
 // This function should render the gamefield on the LED matrix. It is called
 // every game tick. The parameter playfieldChanged signals whether the game logic
 // has changed the playfield
 void renderSenseHatMatrix(bool const playfieldChanged) {
   (void) playfieldChanged;
+  //No changes if playfield is the same
+  if (!playfieldChanged){
+    return;
+  }
+  //Otherwise, render the board a new by iterating through the pixel grid
+  //Matrix is 8x8
+  for (int x = 0; x < 8; x++){
+    for (int y = 0; y < 8; y++)
+    //Rewrites color if tile is occupied
+    if (game.playfield[y][x].occupied){
+      matrix_Pointer[x + (8 * y)] = game.playfield[y][x].color;
+    }else{
+      matrix_Pointer[x + (8 * y)] = 0;
+    }
+  }
 }
+
+
 
 
 // The game logic uses only the following functions to interact with the playfield.
@@ -152,6 +246,9 @@ void renderSenseHatMatrix(bool const playfieldChanged) {
 
 static inline void newTile(coord const target) {
   game.playfield[target.y][target.x].occupied = true;
+  //Changes the color of every new tile with a random color
+  game.playfield[target.y][target.x].color = selectRandColor();
+ 
 }
 
 static inline void copyTile(coord const to, coord const from) {
